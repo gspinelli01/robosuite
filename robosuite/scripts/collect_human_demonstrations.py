@@ -18,6 +18,7 @@ import robosuite as suite
 from robosuite.controllers import load_composite_controller_config
 from robosuite.controllers.composite.composite_controller import WholeBody
 from robosuite.wrappers import DataCollectionWrapper, VisualizationWrapper
+from my_scripts.collect_image_wrapper import DataCollectionImageWrapper
 
 
 def collect_human_trajectory(env, device, arm, max_fr):
@@ -134,6 +135,8 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
             model_file (attribute) - model xml string for demonstration
             states (dataset) - flattened mujoco states
             actions (dataset) - actions applied during demonstration
+            eef_pos (dataset) - eef positions
+            observations (dataset) - frame
 
         demo2 (group)
         ...
@@ -158,11 +161,22 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
         state_paths = os.path.join(directory, ep_directory, "state_*.npz")
         states = []
         actions = []
+        eef_pos = []
+        image_obs = []
+        
         success = False
 
         for state_file in sorted(glob(state_paths)):
             dic = np.load(state_file, allow_pickle=True)
             env_name = str(dic["env"])
+
+            # get the action
+            gripper_closure = np.stack([x['actions'] for x in dic['action_infos']])[:,-1]
+            gripper_closure = np.expand_dims(gripper_closure, axis=1)
+            eef_pos.extend(np.concatenate([dic['gripper_state'],gripper_closure], axis=1))
+
+            # get the frames
+            image_obs.extend(dic['image_obs'])
 
             states.extend(dic["states"])
             for ai in dic["action_infos"]:
@@ -193,10 +207,13 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
             # write datasets for states and actions
             ep_data_grp.create_dataset("states", data=np.array(states))
             ep_data_grp.create_dataset("actions", data=np.array(actions))
+            # 
+            ep_data_grp.create_dataset("eef_pos", data=np.array(eef_pos))
+            ep_data_grp.create_dataset("image_obs", data=np.array(image_obs))
         else:
             print("Demonstration is unsuccessful and has NOT been saved")
 
-    # write dataset attributes (metadata)
+    # write d;ataset attributes (metadata)
     now = datetime.datetime.now()
     grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
     grp.attrs["time"] = "{}:{}:{}".format(now.hour, now.minute, now.second)
@@ -213,7 +230,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--directory",
         type=str,
-        default=os.path.join(suite.models.assets_root, "demonstrations_private"),
+        default=os.path.join('.', "demonstrations_private"),
     )
     parser.add_argument("--environment", type=str, default="Lift")
     parser.add_argument(
@@ -279,7 +296,19 @@ if __name__ == "__main__":
         default=False,
         help="(DualSense Only)Reverse the effect of the x and y axes of the joystick.It is used to handle the case that the left/right and front/back sides of the view are opposite to the LX and LY of the joystick(Push LX up but the robot move left in your view)",
     )
+    parser.add_argument(
+        "--debug",
+        action='store_true'    
+    )
     args = parser.parse_args()
+
+    if args.debug:
+        import debugpy
+        debugpy.listen(5678)
+        print('waiting for client')
+        debugpy.wait_for_client()
+
+
 
     # Get controller config
     controller_config = load_composite_controller_config(
@@ -307,10 +336,10 @@ if __name__ == "__main__":
         **config,
         has_renderer=True,
         renderer=args.renderer,
-        has_offscreen_renderer=False,
+        has_offscreen_renderer=True,
         render_camera=args.camera,
         ignore_done=True,
-        use_camera_obs=False,
+        use_camera_obs=True,
         reward_shaping=True,
         control_freq=20,
     )
@@ -323,7 +352,11 @@ if __name__ == "__main__":
 
     # wrap the environment with data collection wrapper
     tmp_directory = "/tmp/{}".format(str(time.time()).replace(".", "_"))
-    env = DataCollectionWrapper(env, tmp_directory)
+    # replace with a wrapper that takes collects also images
+  
+    # env = DataCollectionWrapper(env, tmp_directory)
+    env = DataCollectionImageWrapper(env, tmp_directory)
+
 
     # initialize device
     if args.device == "keyboard":
