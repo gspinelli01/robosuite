@@ -170,10 +170,13 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
             dic = np.load(state_file, allow_pickle=True)
             env_name = str(dic["env"])
 
-            # get the action
-            gripper_closure = np.stack([x['actions'] for x in dic['action_infos']])[:,-1]
-            gripper_closure = np.expand_dims(gripper_closure, axis=1)
-            eef_pos.extend(np.concatenate([dic['gripper_state'],gripper_closure], axis=1))
+            # get the action.
+            # NOTE: viene salvato un .npz alla fine di ogni episodio, quando viene fatto il reset. Questo crea il problema
+            # di liste vuote. loro a riga 184 lo gestiscono con la funzione extend().
+            if not len(dic['action_infos']) == 0:
+                gripper_closure = np.stack([x['actions'] for x in dic['action_infos']])[:,-1]
+                gripper_closure = np.expand_dims(gripper_closure, axis=1)
+                eef_pos.extend(np.concatenate([dic['gripper_state'],gripper_closure], axis=1))
 
             # get the frames
             image_obs.extend(dic['image_obs'])
@@ -193,7 +196,7 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
             # recorded the states and actions, the states were recorded AFTER playing that action,
             # so we end up with an extra state at the end.
             del states[-1]
-            assert len(states) == len(actions)
+            assert len(states) == len(actions) == len(eef_pos) == len(image_obs)
 
             num_eps += 1
             ep_data_grp = grp.create_group("demo_{}".format(num_eps))
@@ -207,13 +210,12 @@ def gather_demonstrations_as_hdf5(directory, out_dir, env_info):
             # write datasets for states and actions
             ep_data_grp.create_dataset("states", data=np.array(states))
             ep_data_grp.create_dataset("actions", data=np.array(actions))
-            # 
             ep_data_grp.create_dataset("eef_pos", data=np.array(eef_pos))
             ep_data_grp.create_dataset("image_obs", data=np.array(image_obs))
         else:
             print("Demonstration is unsuccessful and has NOT been saved")
 
-    # write d;ataset attributes (metadata)
+    # write dataset attributes (metadata)
     now = datetime.datetime.now()
     grp.attrs["date"] = "{}-{}-{}".format(now.month, now.day, now.year)
     grp.attrs["time"] = "{}:{}:{}".format(now.hour, now.minute, now.second)
@@ -355,7 +357,7 @@ if __name__ == "__main__":
     # replace with a wrapper that takes collects also images
   
     # env = DataCollectionWrapper(env, tmp_directory)
-    env = DataCollectionImageWrapper(env, tmp_directory)
+    env = DataCollectionImageWrapper(env, tmp_directory, collect_freq=1)
 
 
     # initialize device
